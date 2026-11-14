@@ -19,7 +19,11 @@ video.mir{transform:scaleX(-1)}
 .pill:hover{opacity:1}
 .circ{width:40px;height:40px;border-radius:50%}
 #sw{top:16px;right:16px}
-#fx{top:16px;left:16px;height:40px;border-radius:20px;padding:0 16px;font-size:14px;font-weight:600}
+#fx,#fc{left:16px;height:40px;border-radius:20px;padding:0 16px;font-size:14px;font-weight:600}
+#fx{top:16px}#fc{top:64px}
+#fz{position:absolute;overflow:hidden;pointer-events:none;opacity:0;transition:opacity .25s;display:none;-webkit-mask-image:radial-gradient(ellipse closest-side at center,#000 55%,transparent 100%);mask-image:radial-gradient(ellipse closest-side at center,#000 55%,transparent 100%)}
+#fz.on{opacity:1}
+#fz video{position:absolute;inset:auto;width:auto;height:auto}
 #gal{bottom:20px;left:20px;width:52px;height:52px;border-radius:12px;overflow:hidden;display:none;border:2px solid rgba(255,255,255,.5)}
 #gal img{width:100%;height:100%;object-fit:cover;display:block}
 #gal b{position:absolute;right:3px;bottom:3px;min-width:18px;height:18px;border-radius:9px;background:rgba(0,0,0,.65);font-size:11px;line-height:18px;text-align:center;padding:0 4px}
@@ -40,14 +44,16 @@ video.mir{transform:scaleX(-1)}
 </style>
 </head>
 <body>
-<svg width="0" height="0" style="position:absolute"><filter id="sharp" color-interpolation-filters="sRGB"><feConvolveMatrix id="km" order="3" preserveAlpha="true" kernelMatrix="0 0 0 0 1 0 0 0 0"/></filter></svg>
+<svg width="0" height="0" style="position:absolute"><filter id="sharp" color-interpolation-filters="sRGB"><feConvolveMatrix id="km" order="3" preserveAlpha="true" kernelMatrix="0 0 0 0 1 0 0 0 0"/></filter><filter id="sharp2" color-interpolation-filters="sRGB"><feConvolveMatrix id="km2" order="5" preserveAlpha="true" kernelMatrix="0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0"/></filter></svg>
 <div id="stage">
   <div id="cam">
     <video id="v" playsinline muted autoplay></video>
+    <div id="fz"><video id="v2" playsinline muted autoplay></video></div>
     <div id="vg"></div>
     <div id="flash"></div>
     <div id="msg"></div>
     <button class="pill" id="fx" aria-label="Chế độ làm đẹp"></button>
+    <button class="pill" id="fc" aria-label="Làm nét khuôn mặt"></button>
     <button class="pill circ" id="sw" aria-label="Đổi camera"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7H8a4 4 0 0 0-4 4M20 7l-3-3M20 7l-3 3M4 17h12a4 4 0 0 0 4-4M4 17l3-3M4 17l3 3"/></svg></button>
     <button class="pill" id="gal" aria-label="Ảnh đã chụp"></button>
     <button id="shut" aria-label="Chụp"></button>
@@ -60,21 +66,81 @@ var $=function(i){return document.getElementById(i)},v=$("v"),stream=null,facing
 
 /* ---------- chế độ làm đẹp: chỉnh sáng/tương phản/màu + làm nét + tối nhẹ viền để mắt dồn vào mặt ---------- */
 var FX=[
-  {n:"Gốc",      b:1,    c:1,    s:1,    w:0,   sh:0,   vg:0},
-  {n:"Tự nhiên", b:1.04, c:1.06, s:1.08, w:.03, sh:.45, vg:.15},
-  {n:"Tươi sáng",b:1.10, c:1.08, s:1.18, w:.05, sh:.6,  vg:.22},
-  {n:"Ấm áp",    b:1.05, c:1.05, s:1.10, w:.13, sh:.5,  vg:.18}
+  {n:"Gốc",      b:1,    c:1,    s:1,    w:0,   sh:0,   vg:0,   fs:0},
+  {n:"Tự nhiên", b:1.04, c:1.06, s:1.08, w:.03, sh:.45, vg:.15, fs:.9},
+  {n:"Tươi sáng",b:1.10, c:1.08, s:1.18, w:.05, sh:.6,  vg:.22, fs:1.1},
+  {n:"Ấm áp",    b:1.05, c:1.05, s:1.10, w:.13, sh:.5,  vg:.18, fs:1}
 ],fxi=1;
 try{var sv=parseInt(localStorage.getItem("selfie_fx"),10);if(sv>=0&&sv<FX.length)fxi=sv}catch(e){}
 var HAS_CTXF=(function(){try{return"filter"in CanvasRenderingContext2D.prototype}catch(e){return false}})();
-function cssFilter(f){return f.sh||f.b!==1||f.c!==1||f.s!==1||f.w?"brightness("+f.b+") contrast("+f.c+") saturate("+f.s+") sepia("+f.w+")"+(f.sh?" url(#sharp)":""):"none"}
+function cssFilter(f,id,a){var base=f.b!==1||f.c!==1||f.s!==1||f.w,sh=id&&a;if(!base&&!sh)return"none";return"brightness("+f.b+") contrast("+f.c+") saturate("+f.s+") sepia("+f.w+")"+(sh?" url(#"+id+")":"")}
 function applyFx(){
   var f=FX[fxi];
-  v.style.filter=cssFilter(f);
+  v.style.filter=cssFilter(f,"sharp",f.sh);
+  $("fz").style.filter=cssFilter(f,"sharp2",f.fs);
+  $("km2").setAttribute("kernelMatrix",kern5(f.fs).join(" "));
   var a=f.sh;$("km").setAttribute("kernelMatrix","0 "+(-a)+" 0 "+(-a)+" "+(1+4*a)+" "+(-a)+" 0 "+(-a)+" 0");
   document.documentElement.style.setProperty("--vg",f.vg);
   $("fx").textContent="Làm đẹp: "+f.n;
+  showFace();
 }
+/* ---------- làm nét khuôn mặt ---------- */
+var MODEL="https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+    LIB="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
+    detector=null,fstate="loading",faceOn=true,FACE=null,lastSeen=0,G5=[1,4,6,4,1];
+/* nhân chập unsharp 5x5: (1+a)·đơn vị − a·làm mờ Gauss; tổng = 1 nên không đổi độ sáng */
+function kern5(a){var k=[],i,j;for(i=0;i<5;i++)for(j=0;j<5;j++)k.push((i===2&&j===2?1+a:0)-a*G5[i]*G5[j]/256);return k}
+function faceEllipse(W,H){return{cx:FACE.cx*W,cy:FACE.cy*H,rx:FACE.w*W*.8,ry:FACE.h*H*.95}}
+function showFace(){
+  var z=$("fz"),f=FX[fxi];
+  if(!FACE||!faceOn||!f.fs){z.classList.remove("on");return}
+  var L=FACE.cx-FACE.w*.8,T=FACE.cy-FACE.h*.95,Wd=FACE.w*1.6,Hd=FACE.h*1.9;
+  z.style.display="block";
+  z.style.left=L*100+"%";z.style.top=T*100+"%";z.style.width=Wd*100+"%";z.style.height=Hd*100+"%";
+  var vv=$("v2").style;vv.width=100/Wd+"%";vv.height=100/Hd+"%";vv.left=-L/Wd*100+"%";vv.top=-T/Hd*100+"%";
+  z.classList.add("on");
+}
+function updateFc(){
+  $("fc").textContent="Nét mặt: "+(!faceOn?"Tắt":fstate==="loading"?"đang tải…":fstate==="ok"?"Bật":"giữa khung");
+}
+async function loadFace(){
+  updateFc();
+  try{
+    var mod=await import(LIB+"/vision_bundle.mjs"),fsr=await mod.FilesetResolver.forVisionTasks(LIB+"/wasm");
+    var mk=function(d){return{baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",minDetectionConfidence:.5}};
+    try{detector=await mod.FaceDetector.createFromOptions(fsr,mk("GPU"))}catch(e){detector=await mod.FaceDetector.createFromOptions(fsr,mk("CPU"))}
+    fstate="ok";
+  }catch(e){fstate="fallback";FACE={cx:.5,cy:.45,w:.32,h:.5}}   /* không tải được model: làm nét vùng giữa khung */
+  updateFc();showFace();
+}
+function detect(){
+  if(!detector||!faceOn||!stream||document.hidden||!v.videoWidth||v.readyState<2)return;
+  var res;try{res=detector.detectForVideo(v,performance.now())}catch(e){return}
+  var best=null,ds=res&&res.detections||[],i,b,W=v.videoWidth,H=v.videoHeight;
+  for(i=0;i<ds.length;i++){b=ds[i].boundingBox;if(b&&(!best||b.width*b.height>best.width*best.height))best=b}
+  var now=performance.now();
+  if(best){
+    var t={cx:(best.originX+best.width/2)/W,cy:(best.originY+best.height/2)/H,w:best.width/W,h:best.height/H};
+    if(MIR)t.cx=1-t.cx;                       /* toạ độ theo hình hiển thị (đã lật gương) */
+    if(FACE){var k=.4;FACE={cx:FACE.cx+(t.cx-FACE.cx)*k,cy:FACE.cy+(t.cy-FACE.cy)*k,w:FACE.w+(t.w-FACE.w)*k,h:FACE.h+(t.h-FACE.h)*k}}else FACE=t;
+    lastSeen=now;
+  }else if(FACE&&now-lastSeen>600)FACE=null;
+  showFace();
+}
+setInterval(detect,100);
+/* làm nét mạnh hơn trong vùng mặt (ảnh chụp): lấy từ ảnh trước khi làm nét chung, trộn mượt theo hình elip */
+function faceSharpen(cx,W,H,pre,x0,y0,rw,rh,e,a){
+  var k=kern5(a),cur=cx.getImageData(x0,y0,rw,rh),d=cur.data,s=pre.data,x,y,r,i,j,u,v2,acc,wt,dx,dy,dist;
+  for(y=2;y<rh-2;y++){for(x=2;x<rw-2;x++){
+    dx=(x0+x-e.cx)/e.rx;dy=(y0+y-e.cy)/e.ry;dist=Math.sqrt(dx*dx+dy*dy);
+    if(dist>=1)continue;wt=dist<=.55?1:1-(dist-.55)/.45;
+    i=(y*rw+x)*4;
+    for(r=0;r<3;r++){acc=0;for(v2=-2;v2<=2;v2++)for(u=-2;u<=2;u++)acc+=k[(v2+2)*5+u+2]*s[i+((v2*rw+u)<<2)+r];
+      d[i+r]=d[i+r]*(1-wt)+acc*wt;}
+  }}
+  cx.putImageData(cur,x0,y0);
+}
+
 /* làm nét (unsharp 3x3) trên ảnh chụp, chạy được mọi trình duyệt */
 function sharpen(cx,w,h,a){
   if(!a)return;
@@ -114,8 +180,8 @@ async function start(){
     var fm=(stream.getVideoTracks()[0].getSettings()||{}).facingMode;
     /* Webcam laptop / camera trước: xem trước và ảnh chụp đều lật gương */
     MIR=fm==="user"||(!fm&&!(navigator.maxTouchPoints>0));
-    v.classList.toggle("mir",MIR);
-    v.srcObject=stream;
+    v.classList.toggle("mir",MIR);$("v2").classList.toggle("mir",MIR);
+    v.srcObject=stream;$("v2").srcObject=stream;
     tuneCamera(stream.getVideoTracks()[0]);
   }catch(e){say("Không mở được camera (chưa cấp quyền hoặc bị chặn).",true)}
 }
@@ -127,10 +193,17 @@ function snap(){
   var f=FX[fxi];
   cx.save();
   if(MIR){cx.translate(w,0);cx.scale(-1,1)}
-  if(HAS_CTXF)cx.filter=cssFilter({b:f.b,c:f.c,s:f.s,w:f.w,sh:0});
+  if(HAS_CTXF)cx.filter=cssFilter(f,null,0);
   cx.drawImage(v,0,0,w,h);
   cx.restore();
+  var pre=null,e=null,x0=0,y0=0,rw=0,rh=0;
+  if(FACE&&faceOn&&f.fs){
+    e=faceEllipse(w,h);x0=Math.max(0,Math.floor(e.cx-e.rx));y0=Math.max(0,Math.floor(e.cy-e.ry));
+    rw=Math.min(w,Math.ceil(e.cx+e.rx))-x0;rh=Math.min(h,Math.ceil(e.cy+e.ry))-y0;
+    if(rw>8&&rh>8)pre=cx.getImageData(x0,y0,rw,rh);
+  }
   sharpen(cx,w,h,f.sh);
+  if(pre)faceSharpen(cx,w,h,pre,x0,y0,rw,rh,e,f.fs);
   vignette(cx,w,h,f.vg);
   var fl=$("flash");fl.classList.add("f");setTimeout(function(){fl.classList.remove("f")},60);
   cv.toBlob(function(b){
@@ -167,7 +240,8 @@ function closeGal(){$("ov").classList.remove("on")}
 
 $("shut").onclick=snap;
 $("fx").onclick=function(){fxi=(fxi+1)%FX.length;try{localStorage.setItem("selfie_fx",fxi)}catch(e){}applyFx()};
-applyFx();
+$("fc").onclick=function(){faceOn=!faceOn;updateFc();showFace()};
+applyFx();loadFace();
 $("sw").onclick=function(){facing=facing==="user"?"environment":"user";start()};
 $("gal").onclick=openGal;$("cl").onclick=closeGal;
 document.addEventListener("keydown",function(e){
