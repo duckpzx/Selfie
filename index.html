@@ -8,8 +8,10 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;margin:0;background:#000;color:#fff;font:15px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;overflow:hidden}
 #stage{position:fixed;inset:0;padding:10px;display:flex;align-items:center;justify-content:center}
-#cam{position:relative;width:100%;height:100%;border-radius:18px;overflow:hidden;background:#0b0b0c}
-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
+:root{--ar:1.7778;--vg:.15}
+#cam{position:relative;width:min(100%,calc((100dvh - 20px)*var(--ar)));aspect-ratio:var(--ar);border-radius:18px;overflow:hidden;background:#0b0b0c}
+#vg{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse farthest-corner at center,transparent 55%,rgba(0,0,0,var(--vg)) 100%)}
+video{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;display:block}
 video.mir{transform:scaleX(-1)}
 #flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
 #flash.f{opacity:.8;transition:none}
@@ -17,6 +19,7 @@ video.mir{transform:scaleX(-1)}
 .pill:hover{opacity:1}
 .circ{width:40px;height:40px;border-radius:50%}
 #sw{top:16px;right:16px}
+#fx{top:16px;left:16px;height:40px;border-radius:20px;padding:0 16px;font-size:14px;font-weight:600}
 #gal{bottom:20px;left:20px;width:52px;height:52px;border-radius:12px;overflow:hidden;display:none;border:2px solid rgba(255,255,255,.5)}
 #gal img{width:100%;height:100%;object-fit:cover;display:block}
 #gal b{position:absolute;right:3px;bottom:3px;min-width:18px;height:18px;border-radius:9px;background:rgba(0,0,0,.65);font-size:11px;line-height:18px;text-align:center;padding:0 4px}
@@ -37,11 +40,14 @@ video.mir{transform:scaleX(-1)}
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute"><filter id="sharp" color-interpolation-filters="sRGB"><feConvolveMatrix id="km" order="3" preserveAlpha="true" kernelMatrix="0 0 0 0 1 0 0 0 0"/></filter></svg>
 <div id="stage">
   <div id="cam">
     <video id="v" playsinline muted autoplay></video>
+    <div id="vg"></div>
     <div id="flash"></div>
     <div id="msg"></div>
+    <button class="pill" id="fx" aria-label="Chế độ làm đẹp"></button>
     <button class="pill circ" id="sw" aria-label="Đổi camera"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7H8a4 4 0 0 0-4 4M20 7l-3-3M20 7l-3 3M4 17h12a4 4 0 0 0 4-4M4 17l3-3M4 17l3 3"/></svg></button>
     <button class="pill" id="gal" aria-label="Ảnh đã chụp"></button>
     <button id="shut" aria-label="Chụp"></button>
@@ -52,7 +58,51 @@ video.mir{transform:scaleX(-1)}
 (function(){
 var $=function(i){return document.getElementById(i)},v=$("v"),stream=null,facing="user",MIR=false,shots=[];
 
+/* ---------- chế độ làm đẹp: chỉnh sáng/tương phản/màu + làm nét + tối nhẹ viền để mắt dồn vào mặt ---------- */
+var FX=[
+  {n:"Gốc",      b:1,    c:1,    s:1,    w:0,   sh:0,   vg:0},
+  {n:"Tự nhiên", b:1.04, c:1.06, s:1.08, w:.03, sh:.45, vg:.15},
+  {n:"Tươi sáng",b:1.10, c:1.08, s:1.18, w:.05, sh:.6,  vg:.22},
+  {n:"Ấm áp",    b:1.05, c:1.05, s:1.10, w:.13, sh:.5,  vg:.18}
+],fxi=1;
+try{var sv=parseInt(localStorage.getItem("selfie_fx"),10);if(sv>=0&&sv<FX.length)fxi=sv}catch(e){}
+var HAS_CTXF=(function(){try{return"filter"in CanvasRenderingContext2D.prototype}catch(e){return false}})();
+function cssFilter(f){return f.sh||f.b!==1||f.c!==1||f.s!==1||f.w?"brightness("+f.b+") contrast("+f.c+") saturate("+f.s+") sepia("+f.w+")"+(f.sh?" url(#sharp)":""):"none"}
+function applyFx(){
+  var f=FX[fxi];
+  v.style.filter=cssFilter(f);
+  var a=f.sh;$("km").setAttribute("kernelMatrix","0 "+(-a)+" 0 "+(-a)+" "+(1+4*a)+" "+(-a)+" 0 "+(-a)+" 0");
+  document.documentElement.style.setProperty("--vg",f.vg);
+  $("fx").textContent="Làm đẹp: "+f.n;
+}
+/* làm nét (unsharp 3x3) trên ảnh chụp, chạy được mọi trình duyệt */
+function sharpen(cx,w,h,a){
+  if(!a)return;
+  var src=cx.getImageData(0,0,w,h),d=src.data,o=new Uint8ClampedArray(d),k=1+4*a,r,x,y,i;
+  for(y=1;y<h-1;y++){for(x=1;x<w-1;x++){i=(y*w+x)*4;
+    for(r=0;r<3;r++)o[i+r]=k*d[i+r]-a*(d[i+r-4]+d[i+r+4]+d[i+r-w*4]+d[i+r+w*4]);}}
+  src.data.set(o);cx.putImageData(src,0,0);
+}
+function vignette(cx,w,h,a){
+  if(!a)return;
+  cx.save();cx.translate(w/2,h/2);cx.scale(w,h);
+  var g=cx.createRadialGradient(0,0,0,0,0,Math.SQRT1_2);
+  g.addColorStop(.55,"rgba(0,0,0,0)");g.addColorStop(1,"rgba(0,0,0,"+a+")");
+  cx.fillStyle=g;cx.fillRect(-.5,-.5,1,1);cx.restore();
+}
+/* điều khiển thật của camera (nếu webcam hỗ trợ): tự lấy nét, tự phơi sáng, cân bằng trắng liên tục */
+function tuneCamera(track){
+  try{
+    var caps=track.getCapabilities?track.getCapabilities():{},adv={};
+    if(caps.focusMode&&caps.focusMode.indexOf("continuous")>-1)adv.focusMode="continuous";
+    if(caps.exposureMode&&caps.exposureMode.indexOf("continuous")>-1)adv.exposureMode="continuous";
+    if(caps.whiteBalanceMode&&caps.whiteBalanceMode.indexOf("continuous")>-1)adv.whiteBalanceMode="continuous";
+    if(Object.keys(adv).length)track.applyConstraints({advanced:[adv]}).catch(function(){});
+  }catch(e){}
+}
+
 function say(t,retry){var m=$("msg");m.style.display=t?"block":"none";m.textContent=t||"";if(t&&retry){var b=document.createElement("button");b.textContent="Mở camera";b.onclick=start;m.appendChild(document.createElement("br"));m.appendChild(b)}}
+v.addEventListener("loadedmetadata",function(){if(v.videoWidth&&v.videoHeight)document.documentElement.style.setProperty("--ar",(v.videoWidth/v.videoHeight).toFixed(4))});
 function stopTracks(){if(stream){stream.getTracks().forEach(function(t){t.stop()});stream=null}}
 
 async function start(){
@@ -66,6 +116,7 @@ async function start(){
     MIR=fm==="user"||(!fm&&!(navigator.maxTouchPoints>0));
     v.classList.toggle("mir",MIR);
     v.srcObject=stream;
+    tuneCamera(stream.getVideoTracks()[0]);
   }catch(e){say("Không mở được camera (chưa cấp quyền hoặc bị chặn).",true)}
 }
 
@@ -73,9 +124,15 @@ function snap(){
   if(!v.videoWidth)return;
   var w=v.videoWidth,h=v.videoHeight,cv=document.createElement("canvas");cv.width=w;cv.height=h;
   var cx=cv.getContext("2d");
+  var f=FX[fxi];
+  cx.save();
   if(MIR){cx.translate(w,0);cx.scale(-1,1)}
+  if(HAS_CTXF)cx.filter=cssFilter({b:f.b,c:f.c,s:f.s,w:f.w,sh:0});
   cx.drawImage(v,0,0,w,h);
-  var f=$("flash");f.classList.add("f");setTimeout(function(){f.classList.remove("f")},60);
+  cx.restore();
+  sharpen(cx,w,h,f.sh);
+  vignette(cx,w,h,f.vg);
+  var fl=$("flash");fl.classList.add("f");setTimeout(function(){fl.classList.remove("f")},60);
   cv.toBlob(function(b){
     if(!b)return;
     shots.push({blob:b,url:URL.createObjectURL(b),name:"selfie_"+stamp()+".jpg"});
@@ -109,6 +166,8 @@ function openGal(){renderGrid();$("ov").classList.add("on")}
 function closeGal(){$("ov").classList.remove("on")}
 
 $("shut").onclick=snap;
+$("fx").onclick=function(){fxi=(fxi+1)%FX.length;try{localStorage.setItem("selfie_fx",fxi)}catch(e){}applyFx()};
+applyFx();
 $("sw").onclick=function(){facing=facing==="user"?"environment":"user";start()};
 $("gal").onclick=openGal;$("cl").onclick=closeGal;
 document.addEventListener("keydown",function(e){
